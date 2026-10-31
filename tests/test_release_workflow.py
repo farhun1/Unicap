@@ -47,7 +47,7 @@ def run_publish(tmp_path, release_exists):
     env = os.environ.copy()
     env["PATH"] = str(tmp_path) + os.pathsep + env["PATH"]
     env["GH_TOKEN"] = "x"
-    env["GITHUB_REF_NAME"] = "v1.1"
+    env["GITHUB_RUN_NUMBER"] = "7"  # tag is v<version>-r<run>; pin it for stable assertions
     subprocess.run(["pwsh", "-NoProfile", "-Command", script], env=env, check=True,
                    capture_output=True)
     return (tmp_path / "calls.log").read_text(encoding="ascii")
@@ -55,12 +55,12 @@ def run_publish(tmp_path, release_exists):
 
 def test_publish_uploads_with_clobber_when_release_exists(tmp_path):
     log = run_publish(tmp_path, release_exists=True)
-    assert "upload v1.1 dist/unipcap-1.1-win64.zip --clobber" in log
+    assert "upload v1.1-r7 dist/unipcap-1.1-win64.zip --clobber" in log
     assert "create" not in log
 
 
 def test_publish_creates_the_release_when_missing(tmp_path):
     log = run_publish(tmp_path, release_exists=False)
-    assert ("create v1.1 dist/unipcap-1.1-win64.zip --title v1.1 "
-            "--generate-notes --verify-tag") in log
+    assert ("create v1.1-r7 dist/unipcap-1.1-win64.zip --title v1.1-r7 "
+            "--generate-notes") in log
     assert "upload" not in log
