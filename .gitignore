@@ -1,0 +1,10 @@
+.venv/
+build/
+dist/
+vendor/
+__pycache__/
+.pytest_cache/
+.superpowers/
+.claude/settings.local.json
+samples/*
+*.spec
