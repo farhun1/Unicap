@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
 
 permissions:
   contents: write
@@ -15,14 +15,11 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
 
-      - name: Version from tag
+      - name: Version from pyproject
         id: version
         run: |
-          $tag = $env:GITHUB_REF_NAME
-          if ($tag -notmatch '^v(?<v>\d+\.\d+(?:\.\d+)?)$') {
-            throw "Tag '$tag' is not v<major>.<minor>[.<patch>]"
-          }
-          "version=$($Matches['v'])" >> $env:GITHUB_OUTPUT
+          $v = (Select-String -Path pyproject.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
+          "version=$v" >> $env:GITHUB_OUTPUT
 
       - name: Install dev dependencies
         run: uv sync --extra dev
@@ -43,11 +40,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = $env:GITHUB_REF_NAME
-          $zip = "dist/unipcap-${{ steps.version.outputs.version }}-win64.zip"
+          $v = "${{ steps.version.outputs.version }}"
+          $tag = "v$v-r$env:GITHUB_RUN_NUMBER"   # unique per run; re-runs replace the asset
+          $zip = "dist/unipcap-$v-win64.zip"
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $zip --clobber
           } else {
-            gh release create $tag $zip --title $tag --generate-notes --verify-tag
+            gh release create $tag $zip --title $tag --generate-notes
           }
