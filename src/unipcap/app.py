@@ -28,7 +28,8 @@ def main(argv: list[str] | None = None) -> int:
     if a.analyze:
         # windowed exe has no stdout, so results (and errors) go to a file
         if not a.out:
-            ap.error("--analyze requires --out")
+            _notify("--analyze requires --out")  # ap.error would print to a missing console
+            return 2
         try:
             data, rc = summarise(Path(a.analyze)), 0
         except Exception as e:

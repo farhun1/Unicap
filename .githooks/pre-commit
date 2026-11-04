@@ -1,0 +1,41 @@
+#!/bin/sh
+# Refuse to commit packet captures.
+#
+# Captures hold subscriber data (IMSI/MSISDN, private IPs, operator addressing),
+# so no capture of any format is ever committed, in any directory. This hook is
+# the second line of defence behind .gitignore: it also stops `git add -f` and
+# files that were tracked before the rule existed.
+#
+# Enabled per clone with:  git config core.hooksPath .githooks
+set -u
+
+list=$(mktemp) || exit 0
+trap 'rm -f "$list"' EXIT HUP INT TERM
+git diff --cached --name-only --diff-filter=ACMR >"$list" || exit 0
+
+bad=0
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in
+        samples/README.md) continue ;;
+        samples/*) ;;                                     # everything else under samples/
+        *.pcap|*.pcapng|*.cap|*.dmp|*.snoop|*.erf|*.gz) ;; # capture formats, anywhere
+        *) continue ;;
+    esac
+    printf 'pre-commit: refusing to commit capture data: %s\n' "$f" >&2
+    bad=1
+done <"$list"
+
+if [ "$bad" -ne 0 ]; then
+    cat >&2 <<'EOF'
+
+Packet captures and their fixtures contain subscriber data and are never
+published. Keep them local; the test fixture is generated at run time:
+
+    git restore --staged <file>
+    python tests/pcapgen.py        # recreate tests/fixtures/gtpv2_csr.pcap
+
+EOF
+    exit 1
+fi
+exit 0

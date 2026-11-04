@@ -12,6 +12,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The capture guard (tests/test_user_data_guard.py) scans the whole history;
+          # a shallow clone would only see the single triggering commit.
+          fetch-depth: 0
 
       - uses: astral-sh/setup-uv@v5
 

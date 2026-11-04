@@ -1,3 +1,4 @@
+from bisect import bisect_left
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
@@ -161,8 +162,60 @@ def _pairing_match(a: Message, b: Message) -> bool:
     return False
 
 
+def _nearest(entries: list[tuple[float, int]], m: Message, i: int, used: set[int],
+             max_dt: float | None = None) -> tuple[float, int] | None:
+    """Closest unused message of a candidate bucket to m, as (|dt|, index)."""
+    pos = bisect_left(entries, (m.t, -1))  # first entry with t >= m.t
+    lo, hi, best = pos - 1, pos, None
+    n = len(entries)
+    while lo >= 0 or hi < n:
+        dl = m.t - entries[lo][0] if lo >= 0 else None
+        dr = entries[hi][0] - m.t if hi < n else None
+        d = dl if dr is None else dr if dl is None else min(dl, dr)
+        if best is not None and d > best[0]:  # farther entries cannot beat it
+            break
+        if max_dt is not None and d > max_dt:
+            break
+        # both sides at the winning distance: the lower index wins pair()'s tie-break
+        if dl is not None and dl == d:
+            j = entries[lo][1]
+            lo -= 1
+            if j != i and j not in used and (best is None or (d, j) < best):
+                best = (d, j)
+        if dr is not None and dr == d:
+            j = entries[hi][1]
+            hi += 1
+            if j != i and j not in used and (best is None or (d, j) < best):
+                best = (d, j)
+    return best
+
+
+def _pair_index(messages: list[Message]) -> tuple[dict, dict, dict]:
+    """Candidate buckets for the three request/response rules, keyed by everything a
+    candidate must share with the message being paired (counterpart value and direction).
+
+    pair() used to test every other message for every message: a real 20k-message trace
+    spent ~25 s there. Buckets leave only the plausible counterparts to look at."""
+    hbhid: dict[tuple, list] = {}
+    seqno: dict[tuple, list] = {}
+    proc: dict[tuple, list] = {}
+    for j, m in enumerate(messages):
+        k = m.keys
+        if "hbhid" in k and k.get("req") in ("0", "1"):
+            hbhid.setdefault((m.proto, k.get("hbhid"), k.get("code"), k["req"]), []).append((m.t, j))
+        if "seqno" in k and (mt := _int(k.get("msg"))) is not None:
+            seqno.setdefault((m.proto, k.get("seqno"), mt, m.src, m.dst), []).append((m.t, j))
+        if "proc" in k and (p := _int(k.get("proc"))) is not None:
+            proc.setdefault((m.proto, p, m.src, m.dst), []).append((m.t, j))
+    for index in (hbhid, seqno, proc):
+        for entries in index.values():
+            entries.sort()
+    return hbhid, seqno, proc
+
+
 def pair(l: Ladder) -> None:
     used: set[int] = set()
+    hbhid, seqno, proc = _pair_index(l.messages)
     for i, m in enumerate(l.messages):
         if i in used:
             continue
@@ -172,11 +225,29 @@ def pair(l: Ladder) -> None:
                 used.add(i)
                 l.pairs.append((t, i))  # a request may pair with retransmitted responses too
             continue
-        cands = [(abs(m.t - o.t), j) for j, o in enumerate(l.messages)
-                 if j != i and j not in used and _pairing_match(m, o)]
-        if not cands:
+        k = m.keys
+        best = None
+        if "hbhid" in k and k.get("req") in ("0", "1"):
+            entries = hbhid.get((m.proto, k.get("hbhid"), k.get("code"),
+                                 "0" if k["req"] == "1" else "1"))
+            if entries:
+                best = _nearest(entries, m, i, used)
+        if "seqno" in k and (mt := _int(k.get("msg"))) is not None:
+            for counterpart in (mt - 1, mt + 1):
+                entries = seqno.get((m.proto, k.get("seqno"), counterpart, m.dst, m.src))
+                if entries:
+                    cand = _nearest(entries, m, i, used)
+                    if cand is not None and (best is None or cand < best):
+                        best = cand
+        if "proc" in k and (p := _int(k.get("proc"))) is not None:
+            entries = proc.get((m.proto, p + (1 if p % 2 else -1), m.dst, m.src))
+            if entries:
+                cand = _nearest(entries, m, i, used, 30.0)  # only responses within 30 s
+                if cand is not None and (best is None or cand < best):
+                    best = cand
+        if best is None:
             continue
-        j = min(cands)[1]
+        j = best[1]
         used.add(i)
         used.add(j)
         l.pairs.append((i, j))

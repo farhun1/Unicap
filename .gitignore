@@ -1,3 +1,4 @@
+# Environment / build output
 .venv/
 build/
 dist/
@@ -6,5 +7,25 @@ __pycache__/
 .pytest_cache/
 .superpowers/
 .claude/settings.local.json
-samples/*
 *.spec
+
+# ── Packet captures: NEVER committed, in any directory ───────────────────────
+# Captures carry subscriber data (IMSI/MSISDN, private IPs, operator addressing).
+# No capture of any format may enter git: tests generate their fixture at run
+# time (tests/pcapgen.py) and samples/ stays local. `.gz` is included because the
+# app accepts gzipped captures. See tests/test_user_data_guard.py and
+# .githooks/pre-commit — both enforce this rule.
+*.pcap
+*.pcapng
+*.cap
+*.dmp
+*.snoop
+*.erf
+*.gz
+
+# Everything under samples/ is local-only; only its README ships. `samples/*`
+# also prunes the nested Sample_SM/ export folders, whose HTML/CSV/JS exports
+# carry operator addressing too.
+samples/*
+!samples/README.md
+samples/**/*.expected.json

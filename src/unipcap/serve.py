@@ -14,6 +14,17 @@ WEB = Path(__file__).parent / "web"
 KEEPALIVE = 3.0
 
 
+def _scrub(msg: str, paths: tuple[Path, ...], name: str | None) -> str:
+    """Drop staging paths from text shown to the browser.
+
+    OSError renders the offending filename through repr(), so on Windows its message
+    spells every backslash twice; replacing only the plain spelling would leak it."""
+    for path in paths:
+        for spelling in (str(path), str(path).replace("\\", "\\\\")):
+            msg = msg.replace(spelling, name or "")
+    return msg
+
+
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -92,6 +103,8 @@ def _handler(server: "Server"):
             try:
                 n = int(self.headers.get("Content-Length") or 0)
                 name = Path(unquote(self.headers.get("X-Filename") or "")).name or "upload.pcap"
+                if name in (".", ".."):  # Path.name keeps both, but neither can name an uploaded file
+                    name = "upload.pcap"
                 tmp = Path(tempfile.mkdtemp(prefix="unipcap-upload-"))
                 dst = tmp / name
                 with dst.open("wb") as f:
@@ -102,11 +115,16 @@ def _handler(server: "Server"):
                             break
                         f.write(chunk)
                         left -= len(chunk)
-                body = {"ok": True, "summary": summarise(dst)}
+                summary = summarise(dst)
+                # the browser never needs the staging path: report the name the user chose
+                summary["file"]["path"] = name
+                for i, warn in enumerate(summary["warnings"]):
+                    summary["warnings"][i] = _scrub(warn, (dst, tmp), name)
+                body = {"ok": True, "summary": summary}
             except Exception as e:
                 msg = str(e) or type(e).__name__
-                if dst is not None:  # never show the staging path, only the name the user chose
-                    msg = msg.replace(str(dst), name)
+                if tmp is not None:  # never show the staging path, only the name the user chose
+                    msg = _scrub(msg, tuple(p for p in (dst, tmp) if p is not None), name)
                 body = {"ok": False, "error": msg}
             finally:
                 if tmp is not None:

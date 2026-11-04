@@ -40,6 +40,14 @@ def test_cli_analyze_text_file_not_a_capture(tmp_path):
     assert "Not a packet capture" in json.loads(out.read_text(encoding="utf-8"))["error"]
 
 
+def test_cli_analyze_without_out_shows_a_notice(monkeypatch):
+    # ap.error writes the usage to stderr, which the windowed exe does not have
+    seen = []
+    monkeypatch.setattr(app, "_notify", seen.append)
+    assert app.main(["--analyze", str(FIXTURE)]) == 2
+    assert seen and "--analyze requires --out" in seen[0]
+
+
 def test_main_opens_the_default_browser(monkeypatch):
     opened = []
     monkeypatch.setattr(app, "find_tshark", lambda: FIXTURE)

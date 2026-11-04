@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from unipcap import ladder, overview, roles
-from unipcap.tshark import iter_fields, iter_verbose, vals
+from unipcap.tshark import TsharkError, iter_fields, iter_verbose, vals
 
 
 @dataclass
@@ -70,7 +70,13 @@ def analyze(pcap: Path) -> Summary:
     retrans: list[dict[str, str]] = []
     learned: dict[tuple[str, frozenset[str]], str] = {}
     l = ladder.Ladder([], [], [], {})
-    decode_as = [f"sctp.port=={p},diameter" for p in sctp_diameter_ports(pcap, s.warnings)]
+    try:
+        decode_as = [f"sctp.port=={p},diameter" for p in sctp_diameter_ports(pcap, s.warnings)]
+    except TsharkError as e:
+        # a cut-short capture can fail this pre-pass outright when tshark emits no SCTP rows
+        # at all; the main pass still yields the frames it could read, so degrade to no decode-as
+        s.warnings.append(str(e))
+        decode_as = []
     for row in iter_fields(pcap, FIELDS, warnings=s.warnings, decode_as=decode_as):
         s.frames += 1
         if t := row["frame.time_epoch"]:
@@ -110,7 +116,8 @@ def analyze(pcap: Path) -> Summary:
                                              decode_as=decode_as,
                                              options=["sctp.tsn_analysis:FALSE"]))
     except Exception as e:
-        s.warnings.append(f"ladder decode pass failed: {e}")
+        if str(e) not in s.warnings:  # an earlier pass may already report the same tshark complaint
+            s.warnings.append(f"ladder decode pass failed: {e}")
     ladder.pair(l)
     if l.omitted_messages:
         s.warnings.append(f"{l.omitted_messages} signaling messages omitted from ladder")
@@ -122,6 +129,8 @@ def analyze(pcap: Path) -> Summary:
     if undecoded:
         top = ", ".join(p for p, _ in ports.most_common(5))
         s.warnings.append(f"{undecoded} SCTP DATA frames not decoded (ports {top}; PPID {', '.join(sorted(ppids))})")
+    # each tshark pass reports the same complaint (e.g. a cut-short file); keep one banner each
+    s.warnings = list(dict.fromkeys(s.warnings))
     return s
 
 

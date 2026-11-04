@@ -3,14 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>UniPCAP</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>📡</text></svg>">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
 <header class="bar">
   <div class="logo">
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <path d="M12 2L2 7l10 5 10-5-10-5z"/>
       <path d="M2 17l10 5 10-5"/>
       <path d="M2 12l10 5 10-5"/>
@@ -18,28 +20,43 @@
     <h1>UniPCAP</h1>
   </div>
   <div class="bar-actions">
-    <button id="open" type="button">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+    <span id="status" role="status" aria-live="polite"></span>
+    <button id="open" type="button" title="Open a capture (Ctrl+O)" aria-keyshortcuts="Control+O Meta+O">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
       Open capture
     </button>
     <input id="picker" type="file" accept=".pcap,.pcapng,.cap,.gz" hidden>
-    <span id="status" role="status"></span>
   </div>
 </header>
-<div id="dropzone" class="dropzone" hidden>
+<div id="dropzone" class="dropzone" hidden aria-hidden="true">
   <div class="dropzone-inner">
-    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
     <p>Drop your capture file here</p>
     <span>.pcap · .pcapng · .cap · .gz</span>
   </div>
 </div>
-<main>
+<main id="main">
+  <noscript><p class="banner warn">UniPCAP's interface needs JavaScript. Enable it and reload this page.</p></noscript>
   <div id="banners"></div>
   <div id="file" class="file" hidden></div>
-  <div id="chips" class="chips"></div>
+  <div id="chips" class="chips" aria-label="Protocols seen in this capture"></div>
   <div id="ladder" class="ladder" hidden></div>
-  <div id="sections"></div>
-  <p id="empty" class="empty">Open a capture (.pcap, .pcapng, .cap, .gz) to see every node grouped by role.</p>
+  <div id="sec-tools" class="sec-tools" hidden>
+    <div class="search">
+      <input id="sec-filter" type="search" placeholder="Filter nodes — IP, hostname, role, protocol" aria-label="Filter node sections" autocomplete="off" spellcheck="false">
+      <button id="sec-clear" class="search-clear" type="button" aria-label="Clear node filter" title="Clear filter (Esc)" hidden>×</button>
+    </div>
+    <span id="sec-count" class="sec-count" role="status" aria-live="polite"></span>
+  </div>
+  <p id="sec-empty" class="empty-inline" hidden></p>
+  <div id="sections" aria-label="Nodes grouped by role"></div>
+  <div id="empty" class="empty">
+    <p class="empty-title">No capture loaded</p>
+    <p>Open a packet capture to see every node grouped by role, the signalling ladder, and summary metrics.</p>
+    <p class="empty-hint">Drop a file anywhere · <kbd>Ctrl</kbd> + <kbd>O</kbd> to browse</p>
+    <p class="empty-types">.pcap · .pcapng · .cap · .gz</p>
+    <button id="empty-open" class="ghost-btn strong" type="button" data-action="open">Open a capture</button>
+  </div>
 </main>
 <script src="app.js"></script>
 </body>

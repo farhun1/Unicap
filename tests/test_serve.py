@@ -117,6 +117,58 @@ def test_analyze_error_hides_the_staging_path(server):
     assert upload_dirs() == before
 
 
+def test_analyze_success_hides_the_staging_path(server):
+    status, body = call(server, "POST", "analyze", FIXTURE.read_bytes(),
+                        {"X-Filename": "gtpv2_csr.pcap"})
+    d = json.loads(body)
+    assert d["ok"] and d["summary"]["file"]["path"] == "gtpv2_csr.pcap"
+    assert b"unipcap-upload-" not in body  # the browser only ever sees the chosen name
+
+
+def test_analyze_oserror_hides_the_staging_path(server):
+    # OSError embeds the filename through repr(), so Windows paths arrive with doubled
+    # backslashes; a single-spelling replace misses them and leaks the temp directory
+    status, body = call(server, "POST", "analyze", FIXTURE.read_bytes(),
+                        {"X-Filename": "x" * 300 + ".pcap"})
+    d = json.loads(body)
+    assert d["ok"] is False
+    assert b"unipcap-upload-" not in body
+
+
+def test_analyze_dotdot_filename_is_not_treated_as_a_directory(server):
+    status, body = call(server, "POST", "analyze", FIXTURE.read_bytes(),
+                        {"X-Filename": quote("..")})
+    d = json.loads(body)
+    assert d["ok"] and d["summary"]["file"]["path"] == "upload.pcap"
+
+
+def test_analyze_warnings_hide_the_staging_path(server, monkeypatch):
+    def fake(path):
+        return {"file": {"path": str(path), "name": path.name},
+                "warnings": [f'tshark: The file "{path}" appears to have been cut short']}
+
+    monkeypatch.setattr("unipcap.serve.summarise", fake)
+    status, body = call(server, "POST", "analyze", b"x", {"X-Filename": "cut.pcap"})
+    d = json.loads(body)
+    assert d["ok"] is True
+    assert b"unipcap-upload-" not in body
+    assert d["summary"]["warnings"] == [
+        'tshark: The file "cut.pcap" appears to have been cut short']
+
+
+def test_analyze_cut_short_upload_still_returns_a_summary(server, tmp_path):
+    import pcapgen  # tests dir is on sys.path (see tests/test_capture.py)
+
+    p = pcapgen.write(tmp_path / "t.pcap", [pcapgen.udp("10.0.0.1", "10.0.0.2", 1, 2, b"x")] * 5)
+    p.write_bytes(p.read_bytes()[:-50])
+    status, body = call(server, "POST", "analyze", p.read_bytes(), {"X-Filename": "t.pcap"})
+    d = json.loads(body)
+    assert d["ok"] and d["summary"]["file"]["frames"] == 4
+    assert d["summary"]["file"]["path"] == "t.pcap"
+    assert len(d["summary"]["warnings"]) == 1 and "cut short" in d["summary"]["warnings"][0]
+    assert b"unipcap-upload-" not in body
+
+
 def test_analyze_without_tshark_reports_install_hint(server, monkeypatch):
     from unipcap.tshark import TsharkNotFound
 

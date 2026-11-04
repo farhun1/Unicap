@@ -1,8 +1,11 @@
+import random
+import time
+
 import pcapgen
 
 from unipcap.ladder import (DECODE_BUDGET, DECODE_LIMIT, MESSAGE_CAP, Burst, Ladder, Message,
-                            add_row, attach_decode, clean_info, ladder_dict, message_keys, pair,
-                            signaling_proto)
+                            _pairing_match, add_row, attach_decode, clean_info, ladder_dict,
+                            message_keys, pair, signaling_proto)
 from unipcap.tshark import iter_verbose
 
 
@@ -198,3 +201,89 @@ def test_pair_one_partner_only():
                   _msg(3, 0.2, "b", "a", "DIAMETER", {"hbhid": "0x1", "code": "272", "req": "0"})]
     pair(l)
     assert l.pairs == [(0, 1)]  # nearest-in-time answer wins; the other stays unpaired
+
+
+def _naive_pairs(l):
+    """pair()'s original every-message-against-every-message scan, as a reference."""
+    used, pairs = set(), []
+    for i, m in enumerate(l.messages):
+        if i in used:
+            continue
+        if "resp_to" in m.keys:
+            if m.keys["resp_to"] and (t := l.by_frame.get(int(m.keys["resp_to"]))) is not None \
+                    and t != i and l.messages[t].proto == m.proto:
+                used.add(i)
+                pairs.append((t, i))
+            continue
+        cands = [(abs(m.t - o.t), j) for j, o in enumerate(l.messages)
+                 if j != i and j not in used and _pairing_match(m, o)]
+        if not cands:
+            continue
+        j = min(cands)[1]
+        used.add(i)
+        used.add(j)
+        pairs.append((i, j))
+    return pairs
+
+
+def test_pair_matches_the_reference_on_a_mixed_ladder():
+    rng = random.Random(7)
+    ips = ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
+    raw = []  # one dict per message: t, src, dst, proto, keys
+
+    def add(t, src, dst, proto, keys):
+        raw.append({"t": round(t, 3), "src": src, "dst": dst, "proto": proto, "keys": keys})
+
+    for n in range(60):  # Diameter: some unanswered, answered once, or answered twice
+        a, b = rng.sample(ips, 2)
+        t = 100.0 + n * 0.4
+        add(t, a, b, "DIAMETER", {"hbhid": f"0x{n}", "code": "272", "req": "1"})
+        for k in range(rng.choice([0, 1, 1, 2])):
+            add(t + 0.05 + k * 0.01, b, a, "DIAMETER",
+                {"hbhid": f"0x{n}", "code": "272", "req": "0"})
+    for n in range(40):  # PFCP: seqno + message-type step, direction reversed
+        a, b = rng.sample(ips, 2)
+        t = 100.0 + rng.random() * 8
+        add(t, a, b, "PFCP", {"seqno": str(n), "msg": "50"})
+        if rng.random() < 0.8:
+            add(t + rng.choice([0.0, 0.2, 0.2]), b, a, "PFCP", {"seqno": str(n), "msg": "51"})
+    for n in range(40):  # S1AP: outcome within the window, one deliberately late
+        a, b = rng.sample(ips, 2)
+        t = 100.0 + n * 0.5
+        add(t, a, b, "S1AP", {"proc": "13"})
+        add(t + rng.choice([0.1, 0.1, 0.3, 31.0]), b, a, "S1AP", {"proc": "14"})
+    for n in range(10):  # GTPv2: tshark's own response -> request frame link
+        a, b = rng.sample(ips, 2)
+        req = {"t": 100.0 + n, "src": a, "dst": b, "proto": "GTPv2",
+               "keys": {"seq": f"0x{n}", "msg": "32", "resp_to": ""}}
+        resp = {"t": 100.5 + n, "src": b, "dst": a, "proto": "GTPv2",
+                "keys": {"seq": f"0x{n}", "msg": "33", "resp_to": req}}
+        raw += [req, resp]
+    for n in range(5):  # messages no rule can pair: never a candidate either
+        add(101.0 + n, "10.0.0.1", "10.0.0.2", "SIP", {})
+    raw.sort(key=lambda r: r["t"])
+    l = Ladder([], [], [], {})
+    frame_of = {id(r): i for i, r in enumerate(raw, 1)}
+    for frame, r in enumerate(raw, 1):
+        if isinstance(r["keys"].get("resp_to"), dict):
+            r["keys"]["resp_to"] = str(frame_of[id(r["keys"]["resp_to"])])
+        l.messages.append(Message(r["t"], frame, r["src"], r["dst"], f"m{frame}",
+                                  r["proto"], r["keys"]))
+        l.by_frame[frame] = frame - 1
+    pair(l)
+    expected = Ladder([], [], [], {})
+    expected.messages, expected.by_frame = l.messages, l.by_frame
+    assert l.pairs == _naive_pairs(expected)
+
+
+def test_pair_large_ladder_is_not_quadratic():
+    # a real 20k-message sample spent ~25 s in the old scan; this ladder would take
+    # seconds before the candidate buckets and milliseconds after
+    l = Ladder([], [], [], {})
+    for i in range(8000):
+        l.messages.append(Message(i * 0.001, i + 1, "a" if i % 2 == 0 else "b",
+                                  "b" if i % 2 == 0 else "a", "m", "S1AP",
+                                  {"proc": "13" if i % 2 == 0 else "14"}))
+    started = time.perf_counter()
+    pair(l)
+    assert len(l.pairs) == 4000 and time.perf_counter() - started < 1.0

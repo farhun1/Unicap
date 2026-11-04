@@ -1,7 +1,22 @@
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 import pcapgen
 from unipcap.tshark import TsharkError, TsharkNotFound, find_tshark, iter_fields, vals
+
+
+def test_scratch_profile_directory_is_removed_at_exit():
+    # created at import; without cleanup every run leaves an unipcap-ws-* dir in %TEMP%
+    code = "import unipcap.tshark as t; print(t._EMPTY_PROFILE)"
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    path = Path(r.stdout.strip())
+    assert path.name.startswith("unipcap-ws-")
+    assert not path.exists()
 
 
 def test_env_override_wins(tmp_path, monkeypatch):

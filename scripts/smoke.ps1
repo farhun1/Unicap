@@ -6,10 +6,24 @@ $port = Get-Random -Minimum 20000 -Maximum 60000
 $gui = $null
 $oldPath = $env:PATH
 Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+# The test capture is generated at test time, never committed (captures must not
+# enter git), so a fresh checkout may not have it yet.
+$fixture = "tests\fixtures\gtpv2_csr.pcap"
+if (-not (Test-Path $fixture)) { uv run python tests\pcapgen.py }
+if (-not (Test-Path $fixture)) { Fail "cannot generate $fixture" }
 Copy-Item dist\unipcap $dir -Recurse
 try {
     if (-not (Test-Path (Join-Path $dir "THIRD_PARTY.md"))) { Fail "missing THIRD_PARTY.md" }
     if (Test-Path (Join-Path $dir "_internal\vendor")) { Fail "vendor folder still bundled" }
+    # The GUI is the product; /ping alone would still pass if --add-data broke.
+    $web = Join-Path $dir "_internal\unipcap\web"
+    foreach ($f in "index.html", "app.js", "style.css") {
+        $built = Join-Path $web $f
+        $source = Join-Path "src\unipcap\web" $f
+        if (-not (Test-Path $built)) { Fail "missing bundled web asset $f" }
+        if ((Get-FileHash $built).Hash -ne (Get-FileHash $source).Hash) { Fail "bundled $f differs from source" }
+    }
+    Write-Host "bundled UI assets OK"
     Remove-Item $out -ErrorAction SilentlyContinue
     # minimal PATH and no override: proves the installed Wireshark is found without a bundled copy
     $env:PATH = "C:\Windows\System32"

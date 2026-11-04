@@ -94,7 +94,20 @@ def write(path: Path, frames: list[bytes], times: list[float] | None = None) -> 
     return path
 
 
-if __name__ == "__main__":
-    here = Path(__file__).parent / "fixtures"
-    here.mkdir(exist_ok=True)
-    write(here / "gtpv2_csr.pcap", [gtpv2_csr("10.3.0.1", "10.4.0.1", [(10, "10.3.0.1"), (7, "10.5.0.1")])])
+# One-frame GTPv2 Create Session Request used by several tests. It is generated
+# at test time, never committed: no capture file may enter git (see
+# tests/test_user_data_guard.py). Its name stays stable because tests assert it.
+FIXTURE_NAME = "gtpv2_csr.pcap"
+
+
+def ensure_gtpv2_csr_fixture(path: Path) -> Path:
+    """Create the canonical test capture if it is missing, and return it."""
+    if not path.is_file():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write(path, [gtpv2_csr("10.3.0.1", "10.4.0.1",
+                               [(10, "10.3.0.1"), (7, "10.5.0.1")])])
+    return path
+
+
+if __name__ == "__main__":  # python tests/pcapgen.py
+    print(ensure_gtpv2_csr_fixture(Path(__file__).parent / "fixtures" / FIXTURE_NAME))

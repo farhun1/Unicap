@@ -52,6 +52,16 @@ def test_undecoded_sctp_warning(tmp_path):
     assert any("SCTP DATA frames not decoded" in w and "2641" in w for w in s.warnings)
 
 
+def test_cut_short_capture_still_analyzes(tmp_path):
+    # the SCTP decode-as pre-pass gets zero matching rows, so tshark exits non-zero with
+    # nothing to warn about; that must not abort an otherwise readable (truncated) capture
+    p = pcapgen.write(tmp_path / "t.pcap", [pcapgen.udp("10.0.0.1", "10.0.0.2", 1, 2, b"x" * 100)] * 5)
+    p.write_bytes(p.read_bytes()[:-50])
+    s = analyze(p)
+    assert s.frames == 4
+    assert sum("cut short" in w for w in s.warnings) == 1  # one banner, not one per tshark pass
+
+
 def test_analyze_decodes_sctp_ppid0_diameter(tmp_path):
     f = pcapgen.sctp_data("10.0.0.1", "10.0.0.2", 13201, 2660, 0, pcapgen.diameter_ccr())
     s = analyze(pcapgen.write(tmp_path / "ccr.pcap", [f]))

@@ -1,3 +1,4 @@
+import atexit
 import os
 import re
 import shutil
@@ -36,6 +37,7 @@ def find_tshark() -> Path:
 
 
 _EMPTY_PROFILE = tempfile.mkdtemp(prefix="unipcap-ws-")  # keeps a personal Wireshark profile out of results
+atexit.register(shutil.rmtree, _EMPTY_PROFILE, ignore_errors=True)  # else every run leaves one in %TEMP%
 
 
 def iter_fields(pcap: Path, fields: list[str], display_filter: str = "",
