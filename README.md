@@ -40,13 +40,18 @@ The server shuts down a few seconds after the last browser tab closes.
   `Ctrl`/`Cmd` + `O`. Supported: `.pcap`, `.pcapng`, `.cap`, `.gz`.
 - **Ladder tabs**: *Overview* (metrics), *GTPC* (signalling messages), *GTPU*
   (user-plane flows). Click a message or flow to read its decode/detail beside the ladder.
+- **Protocol chips**: click any chip to jump straight to that protocol — signalling
+  protocols (DIAMETER, GTPv2, SIP, …) open the filtered GTPC list, everything else
+  (GTP/TCP, GTP/DNS, DNS, TLSv1.3, RADIUS, …) opens the filtered GTPU flows. Matching is
+  exact, so *DNS* never also shows *GTP/DNS*; the active chip and a "Protocol: X" pill show
+  the filter, and clicking the chip again (or `Esc`) clears it.
 - **Filters**: one box searches messages (name, protocol, node, frame) and one searches
   nodes (IP, hostname, role, protocol, evidence). Both filter the whole capture, not just
   the rows on screen, and show live counts.
 - **Node focus**: click a node header to see only that node's flows; click again to clear.
 - **Keyboard**: `/` focuses the ladder filter, `↑`/`↓`/`PageUp`/`PageDown`/`Home`/`End`
   move through messages, `Enter`/`Space` selects, `←`/`→` switch tabs, `Esc` backs out of
-  the overlay filter → detail → node focus → filters in that order.
+  the overlay filter → detail → node focus → protocol chip → filters in that order.
 - Large captures are fine: the ladder keeps its full scroll height but only renders the
   visible rows, so a 30k-message trace stays responsive.
 

@@ -289,3 +289,34 @@ def test_app_js_detail_rows_pass_kids_in_kids_slot(server):
     status, body = call(server, "GET", "app.js")
     assert status == 200
     assert b'h("div", "ld-row", null, [h("span", "ld-k", k), h("span", "ld-v", v)])' in body
+
+
+def test_ladder_tabs_stay_visible_on_the_overview_tab(server):
+    # The overview renders inside the scroll container, below the sticky tab strip.
+    # Hiding that container on the default Overview tab (as an earlier rewrite did)
+    # hid Overview/GTPC/GTPU themselves, making the ladder views unreachable.
+    status, body = call(server, "GET", "app.js")
+    assert status == 200
+    assert b"mainEl.hidden" not in body  # never hide the element that holds the tabs
+    assert b"if (ovEl) mainEl.appendChild(ovEl)" in body  # overview sits below the tabs
+    assert b"ovEl.hidden = !overview" in body  # visibility follows the selected tab
+    status, css = call(server, "GET", "style.css")
+    assert status == 200
+    # the overview must not become a second scroll container inside .ladder-main
+    assert b".overview { padding: 14px; }" in css
+
+
+def test_protocol_chips_jump_to_their_rows(server):
+    # Each protocol chip is a link into the ladder: it opens the tab that holds those
+    # rows (signalling -> GTPC, everything else -> GTPU) and filters by EXACT protocol,
+    # so a "DNS" chip must not also show "GTP/DNS" frames.
+    status, body = call(server, "GET", "app.js")
+    assert status == 200
+    assert b'"chip link"' in body
+    assert b"chipHandler" in body
+    assert b"dataset.proto" in body  # chip -> protocol key
+    assert b"protoFilter.key.toUpperCase()" in body  # exact protocol match
+    assert b"SIGNALLING_PROTOS" in body  # DIAMETER/GTPv2/SIP chips open the GTPC tab
+    assert b"clearProtoFilterHook" in body  # Escape backs out of the chip filter
+    status, css = call(server, "GET", "style.css")
+    assert status == 200 and b".chip.link" in css and b".chip.on" in css

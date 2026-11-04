@@ -52,12 +52,26 @@ const LADDER_ROW_H = 35;     // fixed row height, not time-proportional
 const LADDER_TIME_W = 210;   // right-aligned time column
 let ladderFocus = -1;        // focused node index, -1 = all
 let ladderQuery = "";        // case-insensitive ladder filter text
+let protoFilter = null;      // protocol-chip filter: {label, key, tab}
+let chipHandler = null;      // renderChips -> renderLadder bridge (set per render)
+
+// Signalling is normalised into ladder messages. A protocol chip can spell it with a
+// payload suffix ("S1AP/NAS-EPS") or a variant ("GTPv2-C"), so match the base name.
+const SIGNALLING_PROTOS = ["S1AP", "NGAP", "GTPv2", "PFCP", "DIAMETER", "SIP", "CAMEL", "SGSAP"];
+function signallingFor(chipProto) {
+  const up = String(chipProto || "").toUpperCase();
+  return SIGNALLING_PROTOS.find((n) => {
+    const u = n.toUpperCase();
+    return up === u || up.startsWith(u + "/") || up.startsWith(u + "-");
+  }) || null;
+}
 
 // Hooks the global keyboard handler uses against the current ladder instance.
 let relayoutLadder = null;       // recompute the scroll window after a resize
 let closeLadderSelection = null; // Escape: close the message detail
 let clearLadderFocusHook = null; // Escape: clear the focused node
 let clearLadderFilterHook = null;// Escape: clear the ladder filter
+let clearProtoFilterHook = null; // Escape: clear the protocol (chip) filter
 let sectionModel = null;         // data behind the role (node) sections
 let sectionQuery = "";           // case-insensitive node filter text
 
@@ -171,10 +185,13 @@ function renderLadder(ld, ov) {
   const el = document.getElementById("ladder");
   ladderFocus = -1;
   ladderQuery = "";
+  protoFilter = null;
+  chipHandler = null;
   relayoutLadder = null;
   closeLadderSelection = null;
   clearLadderFocusHook = null;
   clearLadderFilterHook = null;
+  clearProtoFilterHook = null;
   // an empty ladder counts as absent
   if (ld && !ld.messages.length && !ld.bursts.length) ld = null;
   el.hidden = !ld && !ov;
@@ -228,9 +245,11 @@ function renderLadder(ld, ov) {
   attrs(countEl, { role: "status", "aria-live": "polite" });
   const focusPill = button("focus-pill", "", "Clear node focus");
   focusPill.hidden = true;
+  const protoPill = button("focus-pill proto-pill", "", "Clear protocol filter");
+  protoPill.hidden = true;
   const winNote = h("span", "ladder-window", "");
   const tools = h("div", "ladder-tools", null,
-    [h("div", "search", null, [qInput, qClear]), countEl, focusPill, winNote]);
+    [h("div", "search", null, [qInput, qClear]), countEl, protoPill, focusPill, winNote]);
 
   const tabEls = tabDefs.map(([id, label, count]) => {
     const b = button("ladder-tab", count == null ? label : label + " (" + count + ")");
@@ -321,6 +340,10 @@ function renderLadder(ld, ov) {
     let list = baseRows().filter((r) => ladderFocus < 0
       || (r.kind === "msg" && (r.m.src === ladderFocus || r.m.dst === ladderFocus))
       || (r.kind === "burst" && (r.b.src === ladderFocus || r.b.dst === ladderFocus)));
+    if (protoFilter) {  // exact protocol: a "DNS" chip must not also match "GTP/DNS"
+      const key = protoFilter.key.toUpperCase();
+      list = list.filter((r) => ((r.kind === "msg" ? r.m.proto : r.b.proto) || "").toUpperCase() === key);
+    }
     const terms = ladderQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
     if (terms.length) list = list.filter((r) => terms.every((t) => r.hay.includes(t)));
     return list;
@@ -381,10 +404,13 @@ function renderLadder(ld, ov) {
     if (tab === "overview") return;
     const noun = tab === "gtpc" ? "messages" : "flows";
     const total = baseRows().length;
-    const filtering = !!ladderQuery.trim() || ladderFocus >= 0;
+    const filtering = !!ladderQuery.trim() || ladderFocus >= 0 || !!protoFilter;
+    const scope = protoFilter ? protoFilter.label + " · " : "";
     countEl.textContent = filtering
-      ? fmt(tabRows.length) + " of " + fmt(total) + " " + noun
+      ? scope + fmt(tabRows.length) + " of " + fmt(total) + " " + noun
       : fmt(total) + " " + noun;
+    protoPill.hidden = !protoFilter;
+    if (protoFilter) protoPill.textContent = "Protocol: " + protoFilter.label + "  ×";
     const showPill = ladderFocus >= 0 && nodes[ladderFocus];
     focusPill.hidden = !showPill;
     if (showPill) focusPill.textContent = "Focus: " + nodes[ladderFocus].name + "  ×";
@@ -404,6 +430,12 @@ function renderLadder(ld, ov) {
       box.appendChild(h("span", null, "No " + noun + " match “" + q + "”."));
       const clear = button("ghost-btn", "Clear filter");
       clear.addEventListener("click", () => { qInput.value = ""; applyLadderFilter(); });
+      box.appendChild(clear);
+    } else if (protoFilter) {
+      box.appendChild(h("span", null,
+        "No " + noun + " for protocol " + protoFilter.label + " in this tab."));
+      const clear = button("ghost-btn", "Clear protocol filter");
+      clear.addEventListener("click", () => applyProtocolFilter(protoFilter.label));
       box.appendChild(clear);
     } else if (ladderFocus >= 0) {
       const name = nodes[ladderFocus] ? nodes[ladderFocus].name : "this node";
@@ -611,26 +643,64 @@ function renderLadder(ld, ov) {
   }
 
   function buildBody() {
-    if (tab === "overview") {
-      head.hidden = true;
-      mainEl.hidden = true;
-      tools.hidden = true;
-      detail.hidden = true;
-      if (ovEl) ovEl.hidden = false;
-      return;
-    }
-    head.hidden = false;
-    mainEl.hidden = false;
-    tools.hidden = false;
-    if (ovEl) ovEl.hidden = true;
+    // The overview is a child of the scroller (below the sticky tab strip), so
+    // switching to it must hide the row body only. Hiding `mainEl` here would hide
+    // the tabs themselves and make GTPC/GTPU unreachable.
+    const overview = tab === "overview";
+    head.hidden = overview;
+    body.hidden = overview;
+    tools.hidden = overview;
+    if (overview) detail.hidden = true;
+    if (ovEl) ovEl.hidden = !overview;
+    // Only the tab strip remains in overview: give it the panel's width instead of
+    // the ladder's content width (which can be thousands of pixels).
+    stick.style.width = overview ? "" : contentW + "px";
     mainEl.scrollTop = 0;
+    if (overview) return;
     renderRows();
+  }
+
+  // A protocol chip is a direct jump: switch to the tab that holds those rows and
+  // keep only frames whose protocol matches exactly ("DNS" must not show "GTP/DNS").
+  function applyProtocolFilter(chipProto) {
+    const sign = signallingFor(chipProto);
+    const targetTab = sign ? "gtpc" : "gtpu";
+    const clearing = !!protoFilter && protoFilter.label === chipProto;
+    protoFilter = clearing ? null : { label: chipProto, key: sign || chipProto };
+    if (!clearing) {  // a protocol jump starts from an unfiltered view
+      ladderQuery = "";
+      qInput.value = "";
+      qClear.hidden = true;
+      ladderFocus = -1;
+      paintBoxes();
+    }
+    if (tab !== targetTab) {
+      tab = targetTab;
+      paintTabs();
+    }
+    kbd = 0;
+    clearSelection(false);
+    buildBody();
+    paintChips();
+    if (!el.scrollIntoView) return;
+    const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+  }
+
+  // Highlight the chip whose packets are showing.
+  function paintChips() {
+    document.querySelectorAll("#chips .chip.link").forEach((c) => {
+      const on = !!protoFilter && c.dataset.proto === protoFilter.label;
+      c.classList.toggle("on", on);
+      c.setAttribute("aria-pressed", on ? "true" : "false");
+    });
   }
 
   // Tab / search / focus wiring
   qInput.addEventListener("input", applyLadderFilter);
   qClear.addEventListener("click", () => { qInput.value = ""; applyLadderFilter(); qInput.focus(); });
   focusPill.addEventListener("click", () => { if (ladderFocus >= 0) setFocus(ladderFocus); });
+  protoPill.addEventListener("click", () => { if (protoFilter) applyProtocolFilter(protoFilter.label); });
   detailClose.addEventListener("click", () => clearSelection());
 
   // Roving keyboard navigation over the rendered message rows.
@@ -660,7 +730,7 @@ function renderLadder(ld, ov) {
     scrollQueued = true;
     const run = () => {
       scrollQueued = false;
-      if (el.hidden || tab === "overview" || mainEl.hidden) return;
+      if (el.hidden || tab === "overview") return;
       const total = view.length;
       if (total <= LADDER_ROW_LIMIT) return;
       const [s, e] = windowBounds(total);
@@ -674,7 +744,7 @@ function renderLadder(ld, ov) {
   const ovEl = ov ? renderOverview(ov) : null; // built once; tab switching only toggles visibility
   el.appendChild(mainEl);
   el.appendChild(detail);
-  if (ovEl) el.appendChild(ovEl);
+  if (ovEl) mainEl.appendChild(ovEl); // inside the scroller, under the sticky tabs
   buildBody();
 
   // Exposed to the document-level keyboard handler.
@@ -694,11 +764,17 @@ function renderLadder(ld, ov) {
     applyLadderFilter();
     return true;
   };
+  clearProtoFilterHook = () => {
+    if (!protoFilter) return false;
+    applyProtocolFilter(protoFilter.label);
+    return true;
+  };
   const relayout = () => {
-    if (el.hidden || tab === "overview" || mainEl.hidden) return;
+    if (el.hidden || tab === "overview") return;
     renderRows();
   };
   relayoutLadder = relayout;
+  chipHandler = applyProtocolFilter;  // protocol chips navigate into the ladder
   // Re-measure once real layout exists (the first build happens before/at attach).
   if (window.requestAnimationFrame) {
     window.requestAnimationFrame(() => { if (relayoutLadder === relayout) relayout(); });
@@ -846,22 +922,26 @@ function renderFile(f) {
 }
 
 function renderChips(protocols) {
-  const chips = protocols.slice(0, MAX_PROTO_CHIPS).map(([p, c]) => {
-    const chip = h("span", "chip", p, [h("i", null, fmt(c))]);
-    chip.title = p + " · " + fmt(c) + " frames";
+  // Each chip is a jump link: clicking it opens the ladder filtered to exactly
+  // that protocol (signalling protocols open the GTPC tab, the rest the GTPU tab).
+  const makeChip = ([p, c]) => {
+    const chip = h("span", "chip link", p, [h("i", null, fmt(c))]);
+    chip.title = p + " · " + fmt(c) + " frames — click to show only these";
+    chip.dataset.proto = p;
+    attrs(chip, { role: "button", tabindex: "0", "aria-pressed": "false" });
+    const go = () => { if (chipHandler) chipHandler(p); };
+    chip.addEventListener("click", go);
+    chip.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); }
+    });
     return chip;
-  });
+  };
+  const chips = protocols.slice(0, MAX_PROTO_CHIPS).map(makeChip);
   if (protocols.length > MAX_PROTO_CHIPS) {
     const rest = protocols.slice(MAX_PROTO_CHIPS);
     const more = button("chips-more", "+" + fmt(rest.length) + " more");
     more.title = rest.map(([p, c]) => p + " " + fmt(c)).join("\n");
-    more.addEventListener("click", () => {
-      more.replaceWith(...rest.map(([p, c]) => {
-        const chip = h("span", "chip", p, [h("i", null, fmt(c))]);
-        chip.title = p + " · " + fmt(c) + " frames";
-        return chip;
-      }));
-    });
+    more.addEventListener("click", () => { more.replaceWith(...rest.map(makeChip)); });
     chips.push(more);
   }
   return chips;
@@ -869,6 +949,7 @@ function renderChips(protocols) {
 
 function render(summary) {
   const $ = (id) => document.getElementById(id);
+  chipHandler = null;  // chips are rebuilt below; the ladder re-registers the handler
   document.title = (summary.file && summary.file.name ? summary.file.name + " — " : "") + "UniPCAP";
   $("banners").replaceChildren(...summary.warnings.map((w) => h("div", "banner warn", w)));
   $("file").replaceChildren(...renderFile(summary.file));
@@ -923,9 +1004,12 @@ function showError(msg) {
   ladder.replaceChildren();
   ladder.hidden = true;
   relayoutLadder = null;
+  chipHandler = null;
+  protoFilter = null;
   closeLadderSelection = null;
   clearLadderFocusHook = null;
   clearLadderFilterHook = null;
+  clearProtoFilterHook = null;
   $("sections").replaceChildren();
   sectionModel = [];
   sectionQuery = "";
@@ -1116,6 +1200,7 @@ function handleEscape() {
   }
   if (closeLadderSelection && closeLadderSelection()) return;
   if (clearLadderFocusHook && clearLadderFocusHook()) return;
+  if (clearProtoFilterHook && clearProtoFilterHook()) return;
   if (secFilterEl && secFilterEl.value) { clearSectionFilter(); return; }
   if (clearLadderFilterHook && clearLadderFilterHook()) return;
 }
